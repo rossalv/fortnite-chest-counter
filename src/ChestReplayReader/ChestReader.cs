@@ -475,6 +475,39 @@ public sealed class ChestReader : ReplayReader<Replay>
         return true;
     }
 
+    /// <summary>
+    /// Unreal.Core marks the end of each chunk with BitReader.SetTempEnd(size, slot), which saves the
+    /// previous end in that slot, and undoes it with RestoreTempEnd(slot) in a finally block. When a
+    /// chunk claims to be larger than the data left, SetTempEnd fails without saving anything, and the
+    /// restore then uses whatever an earlier packet left in the slot. That can move the read position
+    /// backwards, so the packet loop re-reads the same bad chunk forever. One replay did exactly that.
+    ///
+    /// Fix: right before the parser opens such a chunk, store the current (correct) end in the slot.
+    /// A failed SetTempEnd then "restores" to the end of the enclosing chunk, so reading moves on.
+    /// </summary>
+    private static void PrimeTempEnd(FBitArchive archive, FBitArchiveEndIndex slot)
+    {
+        if (archive.IsError)
+        {
+            return; // RestoreTempEnd would clear the error flag; leave an errored archive alone.
+        }
+
+        archive.SetTempEnd(0, slot);  // saves the current end in the slot; end = current position
+        archive.RestoreTempEnd(slot); // position unchanged, end back to what it was
+    }
+
+    public override void ProcessBunch(DataBunch bunch)
+    {
+        PrimeTempEnd(bunch.Archive, FBitArchiveEndIndex.CONTENT_BLOCK_PAYLOAD);
+        base.ProcessBunch(bunch);
+    }
+
+    public override bool ReceivedReplicatorBunch(DataBunch bunch, FBitArchive archive, uint? repObject, bool bHasRepLayout)
+    {
+        PrimeTempEnd(archive, FBitArchiveEndIndex.FIELD_HEADER_PAYLOAD);
+        return base.ReceivedReplicatorBunch(bunch, archive, repObject, bHasRepLayout);
+    }
+
     protected override void OnExportRead(uint channelIndex, INetFieldExportGroup? exportGroup)
     {
     }
