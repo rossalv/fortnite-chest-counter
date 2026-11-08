@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <!-- WPF + WinForms implicit usings collide (Application, MessageBox, ...), so usings are explicit. -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>FortniteChestCounter</AssemblyName>
+    <RootNamespace>ChestCounter</RootNamespace>
+    <Product>Fortnite Chest Counter</Product>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ChestReplayReader\ChestReplayReader.csproj" />
+  </ItemGroup>
+
+</Project>
