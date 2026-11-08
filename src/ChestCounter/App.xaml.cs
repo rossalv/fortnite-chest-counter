@@ -28,6 +28,13 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Child-process mode: read one replay and exit (see ReplayWorker). No window, tray or mutex.
+        if (e.Args.Length == 2 && e.Args[0] == ReplayWorker.Arg)
+        {
+            Shutdown(ReplayWorker.Run(e.Args[1]));
+            return;
+        }
+
         var mutexName = AppPaths.IsCustomDataFolder
             ? @"Local\FortniteChestCounter-" + (uint)StringComparer.OrdinalIgnoreCase.GetHashCode(AppPaths.DataFolder)
             : @"Local\FortniteChestCounter";

@@ -18,8 +18,8 @@ gets the count by reading the replays Fortnite saves on your PC. It never touche
    code-signed: click **More info → Run anyway**.
 
 A chest icon appears in the system tray, and the counter appears in the top-left corner of your
-screen. The first run reads every replay you have, which takes about 10 seconds for 100 replays.
-After that, results are cached and startup is instant.
+screen. The first run reads every replay since the counting date, which takes about 40 seconds for
+80 replays. After that, results are cached and startup is instant.
 
 In Fortnite:
 
@@ -79,11 +79,16 @@ Measured on a desktop with a 32-thread CPU:
 
 | | CPU | Memory |
 |---|---|---|
-| Idle / in a match | ~0% (a few KB read every few seconds) | ~45–50 MB |
-| Right after a match ends | ~1 s on one low-priority thread | brief peak ~110 MB, then back to ~45 MB |
-| First run ever (reads all ~100 replays) | ~10 s | ~165 MB actually in use, then ~50 MB |
+| Idle / in a match | ~0% (a few KB read every few seconds) | ~50 MB |
+| Right after a match ends | ~0.5 s, low priority | the overlay stays ~50 MB |
+| First run ever (~80 replays) | ~40 s, low priority, one replay at a time | the overlay stays ~55 MB |
 
 No GPU use; the overlay only redraws when the number changes.
+
+Each replay is read by a short-lived, low-priority copy of the app. Its memory goes back to Windows
+as soon as it exits, and a replay that can't be read within 30 seconds is skipped instead of
+stalling the scan. Skipped replays are listed in `log.txt`, and the limit is `ReplayReadTimeoutSeconds`
+in `settings.json`.
 
 ## Files
 

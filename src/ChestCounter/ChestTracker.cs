@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -66,7 +67,7 @@ public sealed class ChestTracker : IDisposable
     private static readonly TimeSpan AbandonedAfter = TimeSpan.FromMinutes(10);
 
     private readonly Settings _settings;
-    private bool _readSinceRelease; // a replay was fully read since the last ReleaseReader
+    private volatile Process? _child; // replay reader currently running, if any
     private readonly Dictionary<string, CacheEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
     private readonly AutoResetEvent _wake = new(false);
@@ -202,40 +203,44 @@ public sealed class ChestTracker : IDisposable
         }
 
         var changed = false;
-        foreach (var file in todo)
+        try
         {
-            if (token.IsCancellationRequested)
+            foreach (var file in todo)
             {
-                break;
-            }
+                if (token.IsCancellationRequested)
+                {
+                    break;
+                }
 
-            file.Refresh();
-            var entry = ReadReplay(file);
-            AppPaths.Trace($"Read {file.Name}: live={entry.IsLive} writing={entry.BeingWritten} complete={entry.Complete} chests={entry.Chests} error={entry.Error}");
-            CacheEntry? previous;
-            lock (_gate)
-            {
-                _entries.TryGetValue(file.Name, out previous);
-                _entries[file.Name] = entry;
-            }
+                file.Refresh();
+                var entry = ReadReplay(file);
+                AppPaths.Trace($"Read {file.Name}: live={entry.IsLive} writing={entry.BeingWritten} complete={entry.Complete} chests={entry.Chests} error={entry.Error}");
+                CacheEntry? previous;
+                lock (_gate)
+                {
+                    _entries.TryGetValue(file.Name, out previous);
+                    _entries[file.Name] = entry;
+                }
 
-            // Re-checking a match in progress usually finds nothing new: don't rewrite the history for that.
-            var differs = previous is null || !SameResult(previous, entry);
-            changed |= differs;
-            _pending--;
-            if (differs || todo.Count > 1)
-            {
-                Publish();
+                // Re-checking a match in progress usually finds nothing new: don't rewrite the history for that.
+                var differs = previous is null || !SameResult(previous, entry);
+                changed |= differs;
+                _pending--;
+                if (differs || todo.Count > 1)
+                {
+                    Publish();
+                }
             }
         }
-
-        _pending = 0;
-        if (changed)
+        finally
         {
-            SaveCache();
+            // Even if something above throws, never leave the overlay showing a stale "N left".
+            _pending = 0;
+            if (changed)
+            {
+                SaveCache();
+            }
         }
-
-        ReleaseReader();
 
         if (changed || !_ready)
         {
@@ -252,21 +257,6 @@ public sealed class ChestTracker : IDisposable
         && a.Error == b.Error
         && a.ParserVersion == b.ParserVersion
         && (a.IsLive || (a.Size == b.Size && a.LastWriteUtc == b.LastWriteUtc));
-
-    /// <summary>
-    /// Reading a replay allocates hundreds of MB of short-lived buffers. After each batch, give that
-    /// memory back to Windows so the overlay sits at ~50 MB between matches.
-    /// </summary>
-    private void ReleaseReader()
-    {
-        if (!_readSinceRelease)
-        {
-            return;
-        }
-
-        _readSinceRelease = false;
-        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-    }
 
     private bool NeedsRead(FileInfo file)
     {
@@ -350,11 +340,26 @@ public sealed class ChestTracker : IDisposable
 
         try
         {
-            // A fresh parser per replay: the parser keeps growing internal state across replays, so
-            // reusing one made a first-time scan of 100 replays peak at ~3 GB.
-            var result = new ChestReader().Read(file.FullName);
-            _readSinceRelease = true;
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            // Read in a child process with a time limit, so a replay the parser chokes on is skipped
+            // instead of hanging the scan (see ReplayWorker).
+            var timeout = TimeSpan.FromSeconds(Math.Max(1, _settings.ReplayReadTimeoutSeconds));
+            var result = ReplayWorker.Read(file.FullName, timeout, child => _child = child, out var failure);
+            if (result is null)
+            {
+                if (entry.BeingWritten)
+                {
+                    entry.IsLive = true; // locked by the game: a match in progress; re-checked on a timer
+                }
+                else
+                {
+                    // Not retried until the file changes, so a bad replay costs one attempt, not one per poll.
+                    entry.Error = failure;
+                    AppPaths.Log($"{file.Name}: {failure}");
+                }
+
+                return entry;
+            }
+
             entry.ReplayGuid = result.ReplayGuid;
             entry.MatchStartUtc = result.MatchStartUtc;
             entry.LengthMs = result.LengthMs;
@@ -477,6 +482,15 @@ public sealed class ChestTracker : IDisposable
     public void Dispose()
     {
         _cts.Cancel();
+        try
+        {
+            _child?.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // already gone
+        }
+
         _thread?.Join(TimeSpan.FromSeconds(3));
         _watcher?.Dispose();
         _wake.Dispose();

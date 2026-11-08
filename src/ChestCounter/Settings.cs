@@ -33,6 +33,9 @@ public sealed class Settings
     /// <summary>How often to look for new or growing replays.</summary>
     public int PollSeconds { get; set; } = 5;
 
+    /// <summary>A replay that takes longer than this to read is skipped (and logged) instead of stalling the scan.</summary>
+    public double ReplayReadTimeoutSeconds { get; set; } = 30;
+
     /// <summary>Minimum time between checks of a replay that is still being recorded.</summary>
     public int LiveReparseSeconds { get; set; } = 10;
 
